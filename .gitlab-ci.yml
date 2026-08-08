@@ -1,0 +1,54 @@
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - when: never
+
+stages:
+  - build-and-push-images
+
+variables:
+  REGISTRY: docker.io
+  REGISTRY_A: https://index.docker.io/v1/
+
+images:
+  stage: build-and-push-images
+  image:
+    name: gcr.io/kaniko-project/executor:v1.24.0-debug
+    entrypoint: [""]
+  variables:
+    KANIKO_CONTEXT: $CI_PROJECT_DIR
+    DOCKER_CONFIG: /kaniko/.docker
+  parallel:
+    matrix:
+      - IMAGE_NAME: kafka
+        DOCKERFILE: kafka
+      - IMAGE_NAME: kafka-producer
+        DOCKERFILE: kafka_producer
+      - IMAGE_NAME: flink-taxi-job
+        DOCKERFILE: flink/taxi-job
+      - IMAGE_NAME: flink-taxi-active-job
+        DOCKERFILE: flink/taxi-active-job
+      - IMAGE_NAME: prometheus
+        DOCKERFILE: prometheus
+      - IMAGE_NAME: grafana
+        DOCKERFILE: grafana
+  before_script:
+    - set -euo pipefail
+    - mkdir -p "$DOCKER_CONFIG"
+    - echo "{
+          \"auths\":{
+              \"$REGISTRY_A\":{
+                  \"username\":\"$DOCKER_USERNAME\",
+                  \"password\":\"$DOCKER_PASSWORD\"
+              }
+          }
+      }" > $DOCKER_CONFIG/config.json
+  script:
+    - echo "Building and pushing $IMAGE_NAME image using Kaniko."
+    - |
+      /kaniko/executor \
+        --context "$CI_PROJECT_DIR" \
+        --dockerfile "$DOCKERFILE/Dockerfile-full" \
+        --destination "$REGISTRY/$DOCKER_USERNAME/$IMAGE_NAME:$CI_COMMIT_SHORT_SHA" \
+        --destination "$REGISTRY/$DOCKER_USERNAME/$IMAGE_NAME:latest" \
+        --verbosity=info

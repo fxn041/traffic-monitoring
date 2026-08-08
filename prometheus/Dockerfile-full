@@ -1,0 +1,4 @@
+FROM docker.io/prom/prometheus:v3.4.2
+
+COPY ./prometheus/prometheus.yml /etc/prometheus/prometheus.yml
+COPY ./prometheus/flink.rules.yml /etc/prometheus/flink.rules.yml

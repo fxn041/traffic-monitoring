@@ -1,0 +1,21 @@
+redis:
+  host: "redis"
+  port: 6379
+  taxiDb: 0
+  metadataDb: 1
+  ttl: 60
+  areaAlertsStreamKey: taxi:area_alerts
+  speedingAlertsStreamKey: taxi:speeding_alerts
+
+kafka:
+  bootstrapServers: "kafka-master:19092"
+  topic: "taxi-events"
+  groupId: "flink-taxi-job"
+  schemaRegistryUrl: "http://schema-registry-master:8082"
+
+job:
+  taxiSpeedingAlertThreshold: 50
+  taxiMaxSpeedThreshold: 160
+  taxiAreaAlertRadiusThreshold: 10
+  taxiAreaMaxRadiusThreshold: 15
+  taxiActivePollingIntervalMs: 5000

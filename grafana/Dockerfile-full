@@ -1,0 +1,44 @@
+FROM docker.io/golang:1.24.3-bookworm AS build
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y git wget && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js
+ENV BASH_ENV=/root/.bash_env
+RUN touch "${BASH_ENV}"
+RUN echo '. "${BASH_ENV}"' >> ~/.bashrc
+RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.2/install.sh | PROFILE="${BASH_ENV}" bash
+RUN echo node > .nvmrc
+RUN nvm install 16 && nvm use 16
+
+# Clone the Grafana Redis Datasource repository
+RUN git clone https://github.com/RedisGrafana/grafana-redis-datasource.git
+COPY ./grafana/redis-datasource-backend-patch/ /app/grafana-redis-datasource/pkg/
+WORKDIR /app/grafana-redis-datasource
+
+# Build the frontend
+RUN npm install yarn -g
+RUN yarn install
+RUN yarn build
+
+# Build the backend
+RUN go get -u github.com/grafana/grafana-plugin-sdk-go
+RUN go install github.com/magefile/mage@latest
+RUN go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+RUN go mod tidy
+RUN yarn build:backend
+
+
+FROM docker.io/grafana/grafana-oss:12.0.0
+
+# Copy the built plugin from the build stage and enable it (plugin is compiled above and thus unsigned)
+USER root
+COPY --from=build /app/grafana-redis-datasource/dist/ /var/lib/grafana/plugins/redis-datasource/
+RUN sed -i "s/;allow_loading_unsigned_plugins =/allow_loading_unsigned_plugins = redis-datasource/g" /etc/grafana/grafana.ini
+USER grafana
+
+COPY ./grafana/provisioning/ /etc/grafana/provisioning/
+COPY ./grafana/dashboards/ /var/lib/grafana/dashboards/

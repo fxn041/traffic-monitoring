@@ -1,0 +1,33 @@
+FROM docker.io/python:3.13-slim AS build
+
+WORKDIR /app
+RUN apt update && apt install -y curl unzip
+RUN curl -L -o tdriver.zip https://www.kaggle.com/api/v1/datasets/download/arashnic/tdriver
+RUN unzip tdriver.zip 
+RUN mkdir -p /data/taxi_log_2008_by_id/
+RUN mv release/taxi_log_2008_by_id/* /data/taxi_log_2008_by_id/
+COPY ./tools/database_tool/ ./database_tool/
+WORKDIR /app/database_tool
+RUN pip install --no-cache-dir -r requirements.txt 
+RUN python3 database_creator.py
+
+
+# Use an official Python runtime as a parent image
+FROM docker.io/python:3.13-slim
+
+# Set the working directory in the container
+WORKDIR /app
+
+# Copy the requirements.txt file from its location relative to the Dockerfile's directory (producer_dir)
+COPY ./kafka_producer/requirements.txt /app/requirements.txt 
+COPY ./kafka_producer/producer.py /app/producer.py
+COPY --from=build /app/database_tool/output/database.db /app/database.db
+COPY ./kafka_producer/config.yaml /app/config.yaml
+COPY ./flink/taxi-job/src/main/avro/TaxiEvent.avsc /avro/TaxiEvent.avsc
+
+ENV DATABASE_PATH="/app/database.db"
+
+# Install any needed packages specified in requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+ENTRYPOINT ["python", "producer.py"]

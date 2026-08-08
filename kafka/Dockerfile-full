@@ -1,0 +1,5 @@
+FROM docker.io/confluentinc/cp-kafka:7.9.1
+
+COPY ./kafka/setup.sh /usr/bin/kafka-setup.sh
+
+ENTRYPOINT [ "/usr/bin/kafka-setup.sh" ]

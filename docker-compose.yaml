@@ -1,0 +1,219 @@
+services:
+  kafka-master:
+    image: bigdataa9/kafka:latest
+    hostname: kafka-master
+    container_name: kafka-master
+    ports:
+      - "9092:9092" # External port for Kafka clients to connect
+    environment:
+      KAFKA_PROCESS_ROLES: broker,controller # Broker and controller for KRaft
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-master:19093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-master:19092,EXTERNAL://${DOCKER_HOST_IP:-127.0.0.1}:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_LISTENERS: INTERNAL://kafka-master:19092,EXTERNAL://${DOCKER_HOST_IP:-0.0.0.0}:9092,CONTROLLER://kafka-master:19093
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_BROKER_ID: 1
+      CLUSTER_ID: rsfYZfkmTuKhPF7qhB17fg # base64 UUID for the cluster
+      KAFKA_NUM_PARTITIONS: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1         # We are using a single broker,
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1 # multiple brokers would allow for
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1            # fault tolerance and better scalability
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_JMX_PORT: 9999 # Allow for monitoring using Java Management Extensions
+      KAFKA_JMX_OPTS: "-Dcom.sun.management.jmxremote=true -Dcom.sun.management.jmxremote.local.only=false -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Djava.rmi.server.hostname=kafka-master -Dcom.sun.management.jmxremote.rmi.port=9999"
+      KAFKA_JMX_HOSTNAME: kafka-master
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka-master:19092 --list"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+
+  kafka-producer:
+    image: bigdataa9/kafka-producer:latest
+    container_name: kafka-producer
+    depends_on:
+      kafka-master:
+        condition: service_healthy
+      schema-registry-master:
+        condition: service_healthy
+
+  schema-registry-master:
+    image: confluentinc/cp-schema-registry:7.9.1
+    hostname: schema-registry-master
+    container_name: schema-registry-master
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry-master
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'kafka-master:19092'
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8082
+    depends_on:
+      - kafka-master
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://schema-registry-master:8082/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgresql:
+    # PostgreSQL database for Conduktor Console
+    image: postgres:14
+    hostname: postgresql
+    container_name: postgresql
+    environment:
+      POSTGRES_DB: "conduktor-console"
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d conduktor-console"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  conduktor-console:
+    # Conduktor Console to monitor and manage Kafka
+    image: conduktor/conduktor-console:1.30.0
+    hostname: conduktor-console
+    container_name: conduktor-console
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      kafka-master:
+        condition: service_healthy
+    ports:
+      - "8080:8080" # Publish the web interface
+    environment:
+      CDK_DATABASE_HOST: "postgresql"
+      CDK_DATABASE_PORT: "5432"
+      CDK_DATABASE_NAME: "conduktor-console"
+      CDK_DATABASE_USERNAME: "${POSTGRES_USER}"
+      CDK_DATABASE_PASSWORD: "${POSTGRES_PASSWORD}"
+      CDK_ADMIN_EMAIL: "${CONDUKTOR_ADMIN_EMAIL}"
+      CDK_ADMIN_PASSWORD: "${CONDUKTOR_ADMIN_PASSWORD}"
+      CDK_CLUSTERS_0_ID: "kafka-cluster" # Connect to the Kafka cluster by default
+      CDK_CLUSTERS_0_NAME: "Kafka Cluster"
+      CDK_CLUSTERS_0_BOOTSTRAPSERVERS: "kafka-master:19092"
+      CDK_CLUSTERS_0_JMXPORT: "9999"
+      CDK_CLUSTERS_0_SCHEMAREGISTRY_URL: 'http://schema-registry-master:8082'
+      CDK_MONITORING_CORTEX-URL: 'http://conduktor-monitoring:9009/'
+      CDK_MONITORING_ALERT-MANAGER-URL: 'http://conduktor-monitoring:9010/'
+      CDK_MONITORING_CALLBACK-URL: 'http://conduktor-console:8080/monitoring/api/'
+      CDK_MONITORING_NOTIFICATIONS-CALLBACK-URL: 'http://localhost:8080'
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://conduktor-console:8080 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  conduktor-monitoring:
+    # Monitoring service for Conduktor Console
+    image: conduktor/conduktor-console-cortex:1.30.0
+    hostname: conduktor-monitoring
+    container_name: conduktor-monitoring
+    environment:
+      CDK_CONSOLE-URL: "http://conduktor-console:8080" # Connection to the Console container
+
+  flink-jobmanager:
+    image: flink:2.0.0-java21
+    hostname: flink-jobmanager
+    container_name: flink-jobmanager
+    ports:
+      - "8081:8081" # Web UI for Flink Job Manager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        metrics.reporters: prom
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.interval: 1s
+        metrics.reporter.prom.port: 9249
+    command: jobmanager
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://flink-jobmanager:8081 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  flink-taskmanager:
+    image: flink:2.0.0-java21
+    hostname: flink-taskmanager
+    container_name: flink-taskmanager
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 12
+        metrics.reporters: prom
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.interval: 1s
+        metrics.reporter.prom.port: 9249
+    command: taskmanager
+
+  flink-taxi-job:
+    image: bigdataa9/flink-taxi-job:latest
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+      kafka-master:
+        condition: service_healthy
+      schema-registry-master:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  flink-taxi-active-job:
+    image: bigdataa9/flink-taxi-active-job:latest
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  redis:
+    # Redis for caching results forward to the dashboard
+    image: redis:8.0.2-bookworm
+    hostname: redis
+    container_name: redis
+    healthcheck:
+      test: [ "CMD-SHELL", "redis-cli ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redisinsight:
+    # RedisInsight for monitoring Redis
+    image: redis/redisinsight:2.68.0
+    hostname: redisinsight
+    container_name: redisinsight
+    ports:
+      - "5540:5540" # Web UI for RedisInsight
+    environment:
+      RI_APP_PORT: "5540"
+      RI_REDIS_HOST: "redis"
+      RI_REDIS_PORT: "6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  prometheus:
+    image: bigdataa9/prometheus
+    hostname: prometheus
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: bigdataa9/grafana:latest
+    hostname: grafana
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"

@@ -1,0 +1,367 @@
+# kafka
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-master
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-master
+  template:
+    metadata:
+      labels:
+        app: kafka-master
+    spec:
+      containers:
+        - name: kafka-master
+          image: bigdataa9/kafka:latest
+          ports:
+            - containerPort: 19092
+              name: internal
+            - containerPort: 19093
+              name: controller
+          env:
+            - name: KAFKA_PROCESS_ROLES
+              value: "broker,controller"
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: "1@127.0.0.1:19093"
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "INTERNAL://kafka-master:19092"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT"
+            - name: KAFKA_LISTENERS
+              value: "INTERNAL://0.0.0.0:19092,CONTROLLER://0.0.0.0:19093"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "INTERNAL"
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: "CONTROLLER"
+            - name: KAFKA_BROKER_ID
+              value: "1"
+            - name: CLUSTER_ID
+              value: "rsfYZfkmTuKhPF7qhB17fg"
+            - name: KAFKA_NUM_PARTITIONS
+              value: "1"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
+              value: "0"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-master
+spec:
+  selector:
+    app: kafka-master
+  ports:
+    - port: 19092
+      name: internal
+      targetPort: 19092
+    - port: 19093
+      name: controller
+      targetPort: 19093
+---
+# kafka-producer
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-producer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-producer
+  template:
+    metadata:
+      labels:
+        app: kafka-producer
+    spec:
+      initContainers:
+        - name: wait-for-kafka
+          image: busybox
+          command: ['sh', '-c', 'until nc -z kafka-master 19092; do echo waiting for kafka; sleep 5; done; echo kafka is up']
+        - name: wait-for-schema-registry
+          image: busybox
+          command: ['sh', '-c', 'until nc -z schema-registry-master 8082; do echo waiting for schema-registry; sleep 5; done; echo schema-registry is up']
+      containers:
+        - name: kafka-producer
+          image: bigdataa9/kafka-producer:latest
+---
+# schema-registry
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: schema-registry-master
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: schema-registry-master
+  template:
+    metadata:
+      labels:
+        app: schema-registry-master
+    spec:
+      containers:
+        - name: schema-registry-master
+          image: confluentinc/cp-schema-registry:7.9.1
+          ports:
+            - containerPort: 8082
+          env:
+            - name: SCHEMA_REGISTRY_HOST_NAME
+              value: "schema-registry-master"
+            - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
+              value: "kafka-master:19092"
+            - name: SCHEMA_REGISTRY_LISTENERS
+              value: "http://0.0.0.0:8082"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: schema-registry-master
+spec:
+  selector:
+    app: schema-registry-master
+  ports:
+    - port: 8082
+      targetPort: 8082
+---
+# flink-jobmanager
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-jobmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink-jobmanager
+  template:
+    metadata:
+      labels:
+        app: flink-jobmanager
+    spec:
+      containers:
+        - name: flink-jobmanager
+          image: flink:2.0.0-java21
+          ports:
+            - containerPort: 8081
+              name: webui
+            - containerPort: 6123
+              name: rpc
+            - containerPort: 6124
+              name: blob-server
+            - containerPort: 9249
+              name: monitoring
+          env:
+            - name: FLINK_PROPERTIES
+              value: |+
+                jobmanager.rpc.address: flink-jobmanager
+                metrics.reporters: prom
+                metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+                metrics.reporter.prom.interval: 1s
+                metrics.reporter.prom.port: 9249
+          args: ["jobmanager"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-jobmanager
+spec:
+  selector:
+    app: flink-jobmanager
+  ports:
+    - port: 8081
+      name: webui
+      targetPort: 8081
+    - port: 6123
+      name: rpc
+      targetPort: 6123
+    - port: 6124
+      name: blob-server
+      targetPort: 6124
+    - port: 9249
+      name: monitoring
+      targetPort: 9249
+---
+# flink-taskmanager
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-taskmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink-taskmanager
+  template:
+    metadata:
+      labels:
+        app: flink-taskmanager
+    spec:
+      containers:
+        - name: flink-taskmanager
+          image: flink:2.0.0-java21
+          ports:
+            - containerPort: 9249
+              name: monitoring
+          env:
+            - name: FLINK_PROPERTIES
+              value: |+
+                jobmanager.rpc.address: flink-jobmanager
+                taskmanager.numberOfTaskSlots: 12
+                metrics.reporters: prom
+                metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+                metrics.reporter.prom.interval: 1s
+                metrics.reporter.prom.port: 9249
+          args: ["taskmanager"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-taskmanager
+spec:
+  selector:
+    app: flink-taskmanager
+  ports:
+    - port: 9249
+      targetPort: 9249
+---
+# flink-taxi-job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: flink-taxi-job
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: flink-taxi-job
+          image: bigdataa9/flink-taxi-job:latest
+---
+# flink-taxi-active-job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: flink-taxi-active-job
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: flink-taxi-active-job
+          image: bigdataa9/flink-taxi-active-job:latest
+---
+# redis
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:8.0.2-bookworm
+          ports:
+            - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+---
+# prometheus
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: bigdataa9/prometheus
+          ports:
+            - containerPort: 9090
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
+---
+# grafana
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: bigdataa9/grafana:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: project-secret
+                  key: GRAFANA_ADMIN_USER
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: project-secret
+                  key: GRAFANA_ADMIN_PASSWORD
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+spec:
+  type: LoadBalancer
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000

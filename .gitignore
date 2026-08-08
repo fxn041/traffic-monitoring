@@ -1,0 +1,18 @@
+# Environment
+.env
+
+# Data
+taxi_log_2008_by_id
+
+# macOS system
+.DS_store
+
+# VS Code
+.vscode
+
+# Python
+.venv
+
+# Java
+dependency-reduced-pom.xml
+target

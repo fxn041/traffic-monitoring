@@ -1,0 +1,17 @@
+FROM docker.io/maven:3.9-ibm-semeru-21-jammy AS build
+
+WORKDIR /flink
+
+COPY flink/ .
+
+RUN mvn -pl taxi-active-job -am clean package -DskipTests
+
+
+FROM docker.io/flink:2.0.0-java21
+
+WORKDIR /opt/flink/
+
+COPY --from=build /flink/taxi-active-job/target/taxi-active-job-1.0-SNAPSHOT.jar /opt/flink/taxi-active-job-1.0-SNAPSHOT.jar
+COPY ./flink/config.yaml /config.yaml  
+
+ENTRYPOINT ["sh", "-c", "flink run --detached --jobmanager flink-jobmanager:8081 /opt/flink/taxi-active-job-1.0-SNAPSHOT.jar"]

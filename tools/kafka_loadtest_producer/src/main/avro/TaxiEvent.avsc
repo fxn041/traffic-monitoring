@@ -1,0 +1,27 @@
+{
+    "namespace": "de.tuhh.bigdata.a9.taxi.domain",
+    "type": "record",
+    "name": "TaxiEvent",
+    "fields": [
+        {
+            "name": "id",
+            "type": "int"
+        },
+        {
+            "name": "timestamp",
+            "type": "long"
+        },
+        {
+            "name": "dateTime",
+            "type": "string"
+        },
+        {
+            "name": "latitude",
+            "type": "double"
+        },
+        {
+            "name": "longitude",
+            "type": "double"
+        }
+    ]
+}
